@@ -2,7 +2,7 @@ import express from 'express'
 import cors from 'cors'
 import comprasRoutes from './routes/compras.routes.js'
 import almacenesRoutes from './routes/almacenes.routes.js'
-
+import authRoutes from './routes/auth.routes.js'
 const app = express()
 
 app.use(cors())
@@ -18,7 +18,11 @@ app.get('/api', (req, res) => {
     message: 'API SYSOLO funcionando',
   })
 })
+// ============================================
+// AUTENTICACIÓN
+// ============================================
 
+app.use('/api/auth', authRoutes)
 // ============================================
 // COMPRAS
 // ============================================
