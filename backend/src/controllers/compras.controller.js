@@ -54,28 +54,48 @@ export const obtenerCompra = async (req, res) => {
 
   try {
     const [ordenes] = await pool.query(`
-      SELECT
-        oc.id,
-        oc.folio,
-        oc.proveedor_id,
-        p.nombre AS proveedor,
-        oc.usuario_id,
-        oc.fecha_orden,
-        oc.fecha_entrega_estimada,
-        oc.subtotal,
-        oc.descuento,
-        oc.impuesto,
-        oc.total,
-        oc.estado,
-        oc.notas,
-        oc.fecha_creacion,
-        oc.fecha_actualizacion
-      FROM ordenes_compra oc
-      INNER JOIN proveedores p
-        ON p.id = oc.proveedor_id
-      WHERE oc.id = ?
-      LIMIT 1
-    `, [id])
+  SELECT
+    oc.id,
+    oc.folio,
+    oc.proveedor_id,
+    p.nombre AS proveedor,
+    oc.usuario_id,
+    oc.solicitado_por,
+    oc.fecha_solicitud,
+    oc.aprobado_por,
+    oc.fecha_aprobacion,
+    oc.rechazado_por,
+    CONCAT_WS(
+  ' ',
+  usuario_rechazo.nombre,
+  usuario_rechazo.apellido
+) AS rechazado_por_nombre,
+    oc.fecha_rechazo,
+    oc.motivo_rechazo,
+    oc.cancelado_por,
+    oc.fecha_cancelacion,
+    oc.motivo_cancelacion,
+    oc.fecha_orden,
+    oc.fecha_entrega_estimada,
+    oc.subtotal,
+    oc.descuento,
+    oc.impuesto,
+    oc.total,
+    oc.estado,
+    oc.notas,
+    oc.fecha_creacion,
+    oc.fecha_actualizacion
+  FROM ordenes_compra oc
+
+INNER JOIN proveedores p
+  ON p.id = oc.proveedor_id
+
+LEFT JOIN usuarios usuario_rechazo
+  ON usuario_rechazo.id = oc.rechazado_por
+
+WHERE oc.id = ?
+LIMIT 1
+`, [id])
 
     if (ordenes.length === 0) {
       return res.status(404).json({
@@ -231,11 +251,11 @@ export const crearCompra = async (req, res) => {
     const folio = `OC-${String(numero).padStart(4, '0')}`
 
 
-    // ================================================
-    // USUARIO TEMPORAL
-    // ================================================
+   // ================================================
+// USUARIO AUTENTICADO
+// ================================================
 
-    const usuario_id = 1
+const usuario_id = req.user.id
 
 
     // ================================================
@@ -601,11 +621,12 @@ export const actualizarCompra = async (req, res) => {
 
 // =====================================================
 // SOLICITAR ORDEN DE COMPRA
-// Borrador -> Solicitada
+// Borrador → Solicitada
 // =====================================================
 
 export const solicitarCompra = async (req, res) => {
   const { id } = req.params
+  const usuarioId = req.user.id
 
   try {
 
@@ -623,25 +644,20 @@ export const solicitarCompra = async (req, res) => {
       LIMIT 1
     `, [id])
 
-
     if (ordenes.length === 0) {
-
       return res.status(404).json({
         success: false,
         message: 'Orden de compra no encontrada.',
       })
     }
 
-
     const orden = ordenes[0]
-
 
     // ================================================
     // VALIDAR ESTADO
     // ================================================
 
     if (orden.estado !== 'Borrador') {
-
       return res.status(400).json({
         success: false,
         message:
@@ -650,65 +666,66 @@ export const solicitarCompra = async (req, res) => {
       })
     }
 
-
     // ================================================
     // SOLICITAR
     // ================================================
 
     const [resultado] = await pool.query(`
       UPDATE ordenes_compra
-      SET estado = 'Solicitada'
+      SET
+        estado = 'Solicitada',
+        solicitado_por = ?,
+        fecha_solicitud = NOW()
       WHERE id = ?
         AND estado = 'Borrador'
-    `, [id])
-
+    `, [
+      usuarioId,
+      id,
+    ])
 
     if (resultado.affectedRows === 0) {
-
-      return res.status(400).json({
+      return res.status(409).json({
         success: false,
-        message: 'La orden no pudo ser solicitada.',
+        message:
+          'La orden cambió de estado y no pudo ser solicitada.',
       })
     }
-
 
     // ================================================
     // RESPUESTA
     // ================================================
 
-    res.json({
+    return res.json({
       success: true,
       message: 'Orden de compra solicitada correctamente.',
       data: {
         id: Number(id),
         folio: orden.folio,
         estado: 'Solicitada',
+        solicitado_por: usuarioId,
       },
     })
 
   } catch (error) {
-
     console.error(
       'Error al solicitar orden de compra:',
       error
     )
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: 'No se pudo solicitar la orden de compra.',
-      error: error.message,
     })
   }
 }
-
-
 // =====================================================
-// CONFIRMAR / ACEPTAR ORDEN DE COMPRA
-// Solicitada -> Confirmada
+// CONFIRMAR / APROBAR ORDEN DE COMPRA
+// Solicitada → Confirmada
 // =====================================================
 
 export const confirmarCompra = async (req, res) => {
   const { id } = req.params
+  const usuarioId = req.user.id
 
   try {
 
@@ -720,100 +737,126 @@ export const confirmarCompra = async (req, res) => {
       SELECT
         id,
         folio,
-        estado
+        estado,
+        solicitado_por
       FROM ordenes_compra
       WHERE id = ?
       LIMIT 1
     `, [id])
 
-
     if (ordenes.length === 0) {
-
       return res.status(404).json({
         success: false,
         message: 'Orden de compra no encontrada.',
       })
     }
 
-
     const orden = ordenes[0]
-
 
     // ================================================
     // VALIDAR ESTADO
     // ================================================
 
     if (orden.estado !== 'Solicitada') {
-
       return res.status(400).json({
         success: false,
         message:
-          `La orden "${orden.folio}" no puede aceptarse ` +
+          `La orden "${orden.folio}" no puede aprobarse ` +
           `porque se encuentra en estado "${orden.estado}".`,
       })
     }
 
+    // ================================================
+    // EVITAR AUTOAPROBACIÓN
+    // ================================================
+
+    if (
+      Number(orden.solicitado_por) ===
+      Number(usuarioId)
+    ) {
+      return res.status(403).json({
+        success: false,
+        message:
+          'No puedes aprobar una orden de compra que tú mismo solicitaste.',
+      })
+    }
 
     // ================================================
-    // CONFIRMAR
+    // APROBAR
     // ================================================
 
     const [resultado] = await pool.query(`
       UPDATE ordenes_compra
-      SET estado = 'Confirmada'
+      SET
+        estado = 'Confirmada',
+        aprobado_por = ?,
+        fecha_aprobacion = NOW()
       WHERE id = ?
         AND estado = 'Solicitada'
-    `, [id])
-
+    `, [
+      usuarioId,
+      id,
+    ])
 
     if (resultado.affectedRows === 0) {
-
-      return res.status(400).json({
+      return res.status(409).json({
         success: false,
-        message: 'La orden no pudo ser aceptada.',
+        message:
+          'La orden cambió de estado y no pudo ser aprobada.',
       })
     }
-
 
     // ================================================
     // RESPUESTA
     // ================================================
 
-    res.json({
+    return res.json({
       success: true,
-      message: 'Orden de compra aceptada correctamente.',
+      message: 'Orden de compra aprobada correctamente.',
       data: {
         id: Number(id),
         folio: orden.folio,
         estado: 'Confirmada',
+        aprobado_por: usuarioId,
       },
     })
 
   } catch (error) {
-
     console.error(
-      'Error al aceptar orden de compra:',
+      'Error al aprobar orden de compra:',
       error
     )
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: 'No se pudo aceptar la orden de compra.',
-      error: error.message,
+      message: 'No se pudo aprobar la orden de compra.',
     })
   }
 }
 
-
 // =====================================================
 // RECHAZAR ORDEN DE COMPRA
-// Solicitada -> Rechazada
+// Solicitada → Rechazada
 // =====================================================
 
 export const rechazarCompra = async (req, res) => {
   const { id } = req.params
+  const usuarioId = req.user.id
+  const motivo = String(req.body.motivo || '').trim()
 
   try {
+
+    // ================================================
+    // VALIDAR MOTIVO
+    // ================================================
+
+    if (!motivo) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'Debe proporcionar el motivo del rechazo.',
+      })
+    }
 
     // ================================================
     // OBTENER ORDEN
@@ -823,31 +866,27 @@ export const rechazarCompra = async (req, res) => {
       SELECT
         id,
         folio,
-        estado
+        estado,
+        solicitado_por
       FROM ordenes_compra
       WHERE id = ?
       LIMIT 1
     `, [id])
 
-
     if (ordenes.length === 0) {
-
       return res.status(404).json({
         success: false,
         message: 'Orden de compra no encontrada.',
       })
     }
 
-
     const orden = ordenes[0]
-
 
     // ================================================
     // VALIDAR ESTADO
     // ================================================
 
     if (orden.estado !== 'Solicitada') {
-
       return res.status(400).json({
         success: false,
         message:
@@ -856,6 +895,20 @@ export const rechazarCompra = async (req, res) => {
       })
     }
 
+    // ================================================
+    // EVITAR AUTORRECHAZO
+    // ================================================
+
+    if (
+      Number(orden.solicitado_por) ===
+      Number(usuarioId)
+    ) {
+      return res.status(403).json({
+        success: false,
+        message:
+          'No puedes rechazar una orden que tú mismo solicitaste.',
+      })
+    }
 
     // ================================================
     // RECHAZAR
@@ -863,46 +916,48 @@ export const rechazarCompra = async (req, res) => {
 
     const [resultado] = await pool.query(`
       UPDATE ordenes_compra
-      SET estado = 'Rechazada'
+      SET
+        estado = 'Rechazada',
+        rechazado_por = ?,
+        fecha_rechazo = NOW(),
+        motivo_rechazo = ?
       WHERE id = ?
         AND estado = 'Solicitada'
-    `, [id])
-
+    `, [
+      usuarioId,
+      motivo,
+      id,
+    ])
 
     if (resultado.affectedRows === 0) {
-
-      return res.status(400).json({
+      return res.status(409).json({
         success: false,
-        message: 'La orden no pudo ser rechazada.',
+        message:
+          'La orden cambió de estado y no pudo ser rechazada.',
       })
     }
 
-
-    // ================================================
-    // RESPUESTA
-    // ================================================
-
-    res.json({
+    return res.json({
       success: true,
       message: 'Orden de compra rechazada correctamente.',
       data: {
         id: Number(id),
         folio: orden.folio,
         estado: 'Rechazada',
+        rechazado_por: usuarioId,
+        motivo_rechazo: motivo,
       },
     })
 
   } catch (error) {
-
     console.error(
       'Error al rechazar orden de compra:',
       error
     )
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: 'No se pudo rechazar la orden de compra.',
-      error: error.message,
     })
   }
 }
@@ -1208,7 +1263,7 @@ export const recibirCompra = async (req, res) => {
     // USUARIO
     // =====================================================
 
-    const usuario_id = req.user?.id || 1
+    const usuario_id = req.user.id
 
 
     // =====================================================

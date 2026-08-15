@@ -1,6 +1,5 @@
 import express from 'express'
 
-
 import {
   obtenerCompras,
   obtenerCompra,
@@ -15,22 +14,39 @@ import {
   obtenerProductos,
 } from '../controllers/compras.controller.js'
 
+import {
+  autenticar,
+} from '../middleware/autenticar.js'
+
+import {
+  autorizar,
+} from '../middleware/autorizar.js'
+
 const router = express.Router()
+
+
+// ================================
+// AUTENTICACIÓN
+// Todas las rutas de Compras
+// requieren un usuario autenticado
+// ================================
+
+router.use(autenticar)
 
 
 // ================================
 // CATÁLOGOS
 // ================================
 
-
 router.get(
   '/catalogos/proveedores',
+  autorizar('compras.ver'),
   obtenerProveedores
 )
 
-
 router.get(
   '/catalogos/productos',
+  autorizar('compras.ver'),
   obtenerProductos
 )
 
@@ -39,23 +55,28 @@ router.get(
 // ÓRDENES DE COMPRA
 // ================================
 
-
+// Obtener todas las órdenes
 router.get(
   '/',
+  autorizar('compras.ver'),
   obtenerCompras
 )
 
-
+// Obtener una orden
 router.get(
   '/:id',
+  autorizar('compras.ver'),
   obtenerCompra
 )
 
-
+// Crear una orden
 router.post(
   '/',
+  autorizar('compras.crear'),
   crearCompra
 )
+
+
 // ================================
 // ACTUALIZAR ORDEN
 // Solo Borrador
@@ -63,41 +84,43 @@ router.post(
 
 router.put(
   '/:id',
+  autorizar('compras.editar'),
   actualizarCompra
 )
 
+
 // ================================
 // SOLICITAR ORDEN
-// Borrador -> Solicitada
+// Borrador → Solicitada
 // ================================
-
 
 router.put(
   '/:id/solicitar',
+  autorizar('compras.solicitar'),
   solicitarCompra
 )
 
 
 // ================================
-// CONFIRMAR / ACEPTAR ORDEN
-// Solicitada -> Confirmada
+// CONFIRMAR / APROBAR ORDEN
+// Solicitada → Confirmada
 // ================================
-
 
 router.put(
   '/:id/confirmar',
+  autorizar('compras.aprobar'),
   confirmarCompra
 )
 
 
 // ================================
 // RECHAZAR ORDEN
-// Solicitada -> Rechazada
+// Solicitada → Rechazada
 // ================================
-
 
 router.put(
   '/:id/rechazar',
+  autorizar('compras.rechazar'),
   rechazarCompra
 )
 
@@ -106,9 +129,9 @@ router.put(
 // CANCELAR ORDEN
 // ================================
 
-
 router.put(
   '/:id/cancelar',
+  autorizar('compras.cancelar'),
   cancelarCompra
 )
 
@@ -118,9 +141,9 @@ router.put(
 // Confirmada / Parcial
 // ================================
 
-
 router.post(
   '/:id/recepcion',
+  autorizar('compras.recibir'),
   recibirCompra
 )
 

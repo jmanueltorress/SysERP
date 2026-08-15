@@ -204,3 +204,86 @@ export const login = async (req, res) => {
     connection.release()
   }
 }
+
+// =====================================================
+// OBTENER SESIÓN ACTUAL
+// =====================================================
+
+export const me = async (req, res) => {
+  const connection = await pool.getConnection()
+
+  try {
+    const [usuarios] = await connection.query(
+      `
+        SELECT
+          id,
+          nombre,
+          apellido,
+          email,
+          telefono,
+          activo
+        FROM usuarios
+        WHERE id = ?
+        LIMIT 1
+      `,
+      [req.user.id]
+    )
+
+    if (usuarios.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Usuario no encontrado.',
+      })
+    }
+
+    const usuario = usuarios[0]
+
+    if (!usuario.activo) {
+      return res.status(403).json({
+        success: false,
+        message: 'La cuenta se encuentra desactivada.',
+      })
+    }
+
+    const roles = await obtenerRolesUsuario(
+      connection,
+      usuario.id
+    )
+
+    const permisos = await obtenerPermisosUsuario(
+      connection,
+      usuario.id
+    )
+
+    return res.json({
+      success: true,
+      data: {
+        usuario: {
+          id: usuario.id,
+          nombre: usuario.nombre,
+          apellido: usuario.apellido,
+          nombre_completo:
+            `${usuario.nombre} ${usuario.apellido}`,
+          email: usuario.email,
+          telefono: usuario.telefono,
+          roles,
+          permisos,
+        },
+      },
+    })
+
+  } catch (error) {
+    console.error(
+      'Error al obtener la sesión:',
+      error
+    )
+
+    return res.status(500).json({
+      success: false,
+      message: 'Error interno al obtener la sesión.',
+    })
+
+  } finally {
+    connection.release()
+  }
+}
