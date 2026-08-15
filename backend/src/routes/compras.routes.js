@@ -2,6 +2,7 @@ import express from 'express'
 
 import {
   obtenerCompras,
+  obtenerHistorialCompras,
   obtenerCompra,
   crearCompra,
   actualizarCompra,
@@ -51,7 +52,6 @@ router.get(
 )
 
 
-// ================================
 // ÓRDENES DE COMPRA
 // ================================
 
@@ -60,6 +60,15 @@ router.get(
   '/',
   autorizar('compras.ver'),
   obtenerCompras
+)
+
+// ================================
+// HISTORIAL DE ÓRDENES DE COMPRA
+// ================================
+router.get(
+  '/historial',
+  autorizar('compras.ver'),
+  obtenerHistorialCompras
 )
 
 // Obtener una orden

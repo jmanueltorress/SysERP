@@ -1,7 +1,8 @@
 import pool from '../config/database.js'
 
 // =====================================================
-// OBTENER TODAS LAS ÓRDENES
+// OBTENER ÓRDENES ACTIVAS
+// No incluye borradores descartados
 // =====================================================
 
 export const obtenerCompras = async (req, res) => {
@@ -26,25 +27,76 @@ export const obtenerCompras = async (req, res) => {
       FROM ordenes_compra oc
       INNER JOIN proveedores p
         ON p.id = oc.proveedor_id
+      WHERE oc.estado <> 'Descartada'
       ORDER BY oc.id DESC
     `)
 
-    res.json({
+    return res.json({
       success: true,
       data: rows,
     })
 
   } catch (error) {
-    console.error('Error al obtener compras:', error)
+    console.error(
+      'Error al obtener compras:',
+      error
+    )
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: 'Error al obtener las órdenes de compra.',
+      message:
+        'Error al obtener las órdenes de compra.',
     })
   }
 }
+// =====================================================
+// OBTENER HISTORIAL DE COMPRAS
+// Incluye órdenes descartadas
+// =====================================================
 
+export const obtenerHistorialCompras = async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT
+        oc.id,
+        oc.folio,
+        oc.proveedor_id,
+        p.nombre AS proveedor,
+        oc.usuario_id,
+        oc.fecha_orden,
+        oc.fecha_entrega_estimada,
+        oc.subtotal,
+        oc.descuento,
+        oc.impuesto,
+        oc.total,
+        oc.estado,
+        oc.notas,
+        oc.fecha_creacion,
+        oc.fecha_actualizacion
+      FROM ordenes_compra oc
+      INNER JOIN proveedores p
+        ON p.id = oc.proveedor_id
+      ORDER BY oc.id DESC
+    `)
 
+    return res.json({
+      success: true,
+      data: rows,
+    })
+
+  } catch (error) {
+    console.error(
+      'Error al obtener historial de compras:',
+      error
+    )
+
+    return res.status(500).json({
+      success: false,
+      message:
+        'Error al obtener el historial de compras.',
+    })
+  }
+}
 // =====================================================
 // OBTENER UNA ORDEN
 // =====================================================
@@ -73,8 +125,20 @@ export const obtenerCompra = async (req, res) => {
     oc.fecha_rechazo,
     oc.motivo_rechazo,
     oc.cancelado_por,
+    CONCAT_WS(
+  ' ',
+  usuario_cancelacion.nombre,
+  usuario_cancelacion.apellido
+) AS cancelado_por_nombre,
     oc.fecha_cancelacion,
     oc.motivo_cancelacion,
+    oc.descartado_por,
+CONCAT_WS(
+  ' ',
+  usuario_descarte.nombre,
+  usuario_descarte.apellido
+) AS descartado_por_nombre,
+oc.fecha_descarte,
     oc.fecha_orden,
     oc.fecha_entrega_estimada,
     oc.subtotal,
@@ -92,6 +156,12 @@ INNER JOIN proveedores p
 
 LEFT JOIN usuarios usuario_rechazo
   ON usuario_rechazo.id = oc.rechazado_por
+
+LEFT JOIN usuarios usuario_cancelacion
+  ON usuario_cancelacion.id = oc.cancelado_por
+
+LEFT JOIN usuarios usuario_descarte
+  ON usuario_descarte.id = oc.descartado_por
 
 WHERE oc.id = ?
 LIMIT 1
@@ -251,11 +321,11 @@ export const crearCompra = async (req, res) => {
     const folio = `OC-${String(numero).padStart(4, '0')}`
 
 
-   // ================================================
-// USUARIO AUTENTICADO
-// ================================================
+    // ================================================
+    // USUARIO AUTENTICADO
+    // ================================================
 
-const usuario_id = req.user.id
+    const usuario_id = req.user.id
 
 
     // ================================================
@@ -963,11 +1033,16 @@ export const rechazarCompra = async (req, res) => {
 }
 
 // =====================================================
-// CANCELAR ORDEN
+// DESCARTAR / CANCELAR ORDEN DE COMPRA
+//
+// Borrador             → Descartada
+// Solicitada/Confirmada → Cancelada
 // =====================================================
 
 export const cancelarCompra = async (req, res) => {
   const { id } = req.params
+  const usuarioId = req.user.id
+  const motivo = String(req.body.motivo || '').trim()
 
   try {
 
@@ -985,28 +1060,62 @@ export const cancelarCompra = async (req, res) => {
       LIMIT 1
     `, [id])
 
-
     if (ordenes.length === 0) {
-
       return res.status(404).json({
         success: false,
         message: 'Orden de compra no encontrada.',
       })
     }
 
-
     const orden = ordenes[0]
 
+    // ================================================
+    // DESCARTAR BORRADOR
+    // No requiere motivo
+    // ================================================
+
+    if (orden.estado === 'Borrador') {
+      const [resultado] = await pool.query(`
+        UPDATE ordenes_compra
+        SET
+          estado = 'Descartada',
+          descartado_por = ?,
+          fecha_descarte = NOW()
+        WHERE id = ?
+          AND estado = 'Borrador'
+      `, [
+        usuarioId,
+        id,
+      ])
+
+      if (resultado.affectedRows === 0) {
+        return res.status(409).json({
+          success: false,
+          message:
+            'La orden cambió de estado y no pudo descartarse.',
+        })
+      }
+
+      return res.json({
+        success: true,
+        message: 'Borrador descartado correctamente.',
+        data: {
+          id: Number(id),
+          folio: orden.folio,
+          estado: 'Descartada',
+          descartado_por: usuarioId,
+        },
+      })
+    }
 
     // ================================================
-    // VALIDAR ESTADO
+    // VALIDAR CANCELACIÓN
     // ================================================
 
     if (
-      orden.estado !== 'Borrador' &&
+      orden.estado !== 'Solicitada' &&
       orden.estado !== 'Confirmada'
     ) {
-
       return res.status(400).json({
         success: false,
         message:
@@ -1015,57 +1124,73 @@ export const cancelarCompra = async (req, res) => {
       })
     }
 
+    // ================================================
+    // MOTIVO OBLIGATORIO PARA CANCELAR
+    // ================================================
+
+    if (!motivo) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'Debe proporcionar el motivo de la cancelación.',
+      })
+    }
 
     // ================================================
-    // CANCELAR
+    // CANCELAR ORDEN
     // ================================================
 
     const [resultado] = await pool.query(`
       UPDATE ordenes_compra
-      SET estado = 'Cancelada'
+      SET
+        estado = 'Cancelada',
+        cancelado_por = ?,
+        fecha_cancelacion = NOW(),
+        motivo_cancelacion = ?
       WHERE id = ?
-        AND estado IN ('Borrador', 'Confirmada')
-    `, [id])
-
+        AND estado IN (
+          'Solicitada',
+          'Confirmada'
+        )
+    `, [
+      usuarioId,
+      motivo,
+      id,
+    ])
 
     if (resultado.affectedRows === 0) {
-
-      return res.status(400).json({
+      return res.status(409).json({
         success: false,
-        message: 'La orden no pudo ser cancelada.',
+        message:
+          'La orden cambió de estado y no pudo ser cancelada.',
       })
     }
 
-
-    // ================================================
-    // RESPUESTA
-    // ================================================
-
-    res.json({
+    return res.json({
       success: true,
       message: 'Orden de compra cancelada correctamente.',
       data: {
         id: Number(id),
         folio: orden.folio,
         estado: 'Cancelada',
+        cancelado_por: usuarioId,
+        motivo_cancelacion: motivo,
       },
     })
 
   } catch (error) {
-
     console.error(
-      'Error al cancelar orden de compra:',
+      'Error al descartar o cancelar orden de compra:',
       error
     )
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: 'No se pudo cancelar la orden de compra.',
-      error: error.message,
+      message:
+        'No se pudo descartar o cancelar la orden de compra.',
     })
   }
 }
-
 
 // =====================================================
 // PROVEEDORES
